@@ -159,9 +159,11 @@ def main():
                 #get face landmarks
                 face_rect = face_rects[i]
                 shape = predictor(img, face_rect)
+
                 shape = face_utils.shape_to_np(shape)
                 reprojectdst, euler_angle = get_head_pose(shape)
-                
+
+
                 #detect hull to crop face
                 hull = cv2.convexHull(shape)
                 cv2.fillPoly(mask, pts =[hull], color=1)
@@ -183,9 +185,9 @@ def main():
                 faceAligned = cv2.resize(fa.align(img_masked, gray, face_rect), (img.shape[1], img.shape[0]))
 
 
-                name = classify_face(faceAligned)
-                cv2.putText(faceAligned, str(name), (20, 150), cv2.FONT_HERSHEY_PLAIN,
-                    2, (0, 255, 0), thickness=2)
+                # name = classify_face(faceAligned)
+                # cv2.putText(faceAligned, str(name), (20, 150), cv2.FONT_HERSHEY_PLAIN,
+                #     2, (0, 255, 0), thickness=2)
 
 
                 cv2.putText(faceAligned, "P, Y, R: " + str(np.round(euler_angle[:, 0], 2)), (20, 20), cv2.FONT_HERSHEY_PLAIN,
