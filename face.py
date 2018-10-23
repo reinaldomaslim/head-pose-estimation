@@ -4,6 +4,7 @@ import numpy as np
 import face_recognition
 import time
 import face_recognition_knn
+import operator
 
 from imutils import face_utils
 from scipy.spatial import distance as dist
@@ -11,7 +12,7 @@ from scipy.spatial import distance as dist
 
 class Face(object):
 
-    EYE_AR_THRESH = 0.22
+    EYE_AR_THRESH = 0.23
     EYE_AR_CONSEC_FRAMES = 3
     eye_counter = 0
     
@@ -21,7 +22,12 @@ class Face(object):
     life_counter = 3
     alive = True
 
+    names = {}
     name = 'unknown'
+
+    pitch_limit = [-15, 15]
+    yaw_limit = [-30, 30]
+
 
     def __init__(self, face_rect):
         self.face_rect = face_rect
@@ -42,7 +48,7 @@ class Face(object):
             # distance = dist.euclidean(face_center, cur_center)
 
             if distance < threshold and distance < min_dist:
-                min_dist = dist
+                min_dist = distance
                 ind = i
 
         if min_dist == 1000:
@@ -65,7 +71,14 @@ class Face(object):
             self.name = name
 
         cv2.putText(self.img, str(self.name), (10, 10), cv2.FONT_HERSHEY_PLAIN,
-            1.0*self.img.shape[0]/240, (0, 255, 0), thickness=1)
+            1.0, (0, 255, 0), thickness=1)
+        
+        euler_angle = np.round(euler_angle, 1)
+
+        rpy = str(euler_angle[2, 0]) + ', ' + str(euler_angle[0, 0]) + ', ' + str(euler_angle[1, 0])
+
+        cv2.putText(self.img, rpy, (10, self.img.shape[0]-10), cv2.FONT_HERSHEY_PLAIN,
+            0.7, (0, 255, 0), thickness=1)
 
         #check head pose if seeing road
         if self.see_road(euler_angle):
@@ -77,7 +90,6 @@ class Face(object):
             cv2.putText(self.img, "not seeing road: "+not_seeing_road_elapsed_time, (10, 25), cv2.FONT_HERSHEY_PLAIN,
                     1, (0, 0, 255), thickness=1)
 
-        
         #check status of eyes
         if self.eyes_open(shape):
             cv2.putText(self.img, "eyes_open", (10, 40), cv2.FONT_HERSHEY_PLAIN,
@@ -87,7 +99,6 @@ class Face(object):
             closed_eyes_elapsed_time = str(round((time.time() - self.last_time_eyes_open), 1)) + ' s'
             cv2.putText(self.img, "eyes closed: "+closed_eyes_elapsed_time, (10, 40), cv2.FONT_HERSHEY_PLAIN,
                             1, (0, 0, 255), thickness=1)
-
 
         #check status of eyes
         mouth_status = self.mouth_status(shape)
@@ -107,14 +118,12 @@ class Face(object):
 
     def see_road(self, euler_angle):
         #check the head yaw and pitch only
-        pitch_limit = [-15, 15]
-        yaw_limit = [-30, 30]
 
         pitch = euler_angle[0, 0]
         yaw = euler_angle[1, 0]
 
-        if pitch > pitch_limit[0] and pitch < pitch_limit[1]:
-            if yaw > yaw_limit[0] and yaw < yaw_limit[1]:
+        if pitch > self.pitch_limit[0] and pitch < self.pitch_limit[1]:
+            if yaw > self.yaw_limit[0] and yaw < self.yaw_limit[1]:
                 return True
 
         return False
@@ -164,7 +173,14 @@ class Face(object):
             return "unknown"
         
         name = face_recognition_knn.predict([encoded_face], model_path="trained_knn_model.clf")[0]
-        
+
+        if name != "unknown":
+            if name in self.names:
+                self.names[name] += 1
+            else:
+                self.names[name] = 1
+
+            name = max(self.names.items(), key=operator.itemgetter(1))[0]
 
         return name
     
@@ -174,13 +190,11 @@ class Face(object):
 
         C = dist.euclidean(mouth[6], mouth[0])
 
-
         # compute the eye aspect ratio
         ear = (A + B) / (2.0 * C)
      
         # return the eye aspect ratio
         return ear
-
 
     def eye_aspect_ratio(self, eye):
         # compute the euclidean distances between the two sets of
@@ -197,4 +211,3 @@ class Face(object):
      
         # return the eye aspect ratio
         return ear
-

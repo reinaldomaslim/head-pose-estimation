@@ -7,9 +7,9 @@ import face_recognition
 import time
 import face_recognition_knn
 import os
+import sys
 
-
-person_name = 'rivaldo'
+person_name = str(sys.argv[1])
 
 if not os.path.isdir("./face_database/"+person_name):
     os.makedirs("./face_database/"+person_name)
@@ -74,8 +74,6 @@ def get_head_pose(shape):
     return reprojectdst, euler_angle
 
 
-
-
 def main():
     # return
     cap = cv2.VideoCapture(0)
@@ -84,7 +82,9 @@ def main():
         return
     
     counter = 0
-    
+    frame_count = 0
+    record = False
+
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor(face_landmark_path)
     fa = face_utils.FaceAligner(predictor, desiredFaceWidth=256)
@@ -125,23 +125,37 @@ def main():
                     cv2.line(res, reprojectdst[start], reprojectdst[end], (0, 0, 255))
 
                 (x, y, w, h) = face_utils.rect_to_bb(face_rect)
+
+                x = np.clip(x, 0, img.shape[1])
+                y = np.clip(y, 0, img.shape[0])
+                w = np.clip(w, 1, img.shape[1]-x)
+                h = np.clip(h, 1, img.shape[0]-y)
+
                 img_masked = cv2.bitwise_and(img, img, mask = mask)
 
                 faceOrig = cv2.resize(img_masked[y:y + h, x:x + w], (256, 256))
                 faceAligned = cv2.resize(fa.align(img_masked, gray, face_rect), (img.shape[1], img.shape[0]))
 
-                path = './face_database/'+person_name+'/'+person_name+str(counter)+'.jpg'
-                counter+=1
-                cv2.imwrite(path, faceAligned)
+                if record:
+                    if frame_count % 2 == 0:
+                        path = './face_database/'+person_name+'/'+person_name+str(counter)+'.jpg'
+                        counter+=1
+                        cv2.imwrite(path, faceAligned)
 
                 res = np.hstack((res, faceAligned))
 
-
+            frame_count += 1
             cv2.imshow("demo", res)
-
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            key = cv2.waitKey(1) & 0xFF
+            if  key == ord('q'):
                 break
-
+            elif key == ord('r'):
+                if not record:
+                    record = True
+                    print("recording...")
+                else:
+                    record = False
+                    print("stop recording")
 
 if __name__ == '__main__':
     main()

@@ -78,7 +78,6 @@ def main():
         print("Unable to connect to camera.")
         return
         
-
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor(face_landmark_path)
     
@@ -105,6 +104,14 @@ def main():
             face_rects = detector(img, 0)
             
             if len(face_rects) != 0:
+                #check if faces_list has duplicates:
+                for face_0, face_1 in zip(*[iter(faces_list)]*2):
+                    distance = abs(face_0.face_rect.center().x-face_1.face_rect.center().x)+abs(face_0.face_rect.center().y-face_1.face_rect.center().y)
+                    print(distance)
+                    if distance < 5:
+                        #delete one of these
+                        faces_list.remove(face_0)
+
                 for face in faces_list:
                     face_rects = face.match(face_rects)
                     if not face.alive:
