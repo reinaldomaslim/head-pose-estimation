@@ -85,7 +85,7 @@ def main():
     init = True
 
     faces_list = []
-    
+    no_face_detected_count = 0
 
     while cap.isOpened():
         print("-----")
@@ -157,9 +157,13 @@ def main():
                     expansion[start_y:start_y+int(img.shape[0]/2), start_x:start_x+int(img.shape[0]/2)] = face.img
 
                 res = np.hstack((res, expansion))
-            
+                
+                no_face_detected_count = 0
             else:
-                faces_list = []
+                no_face_detected_count += 1
+                if no_face_detected_count > 10:
+                    #reset faces
+                    faces_list = []
 
             cv2.imshow("demo", res)
 
