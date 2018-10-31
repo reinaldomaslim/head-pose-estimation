@@ -4,14 +4,19 @@ import numpy as np
 import face_recognition
 import time
 import face_recognition_knn
+import operator
 
 from imutils import face_utils
 from scipy.spatial import distance as dist
 
+import vlc
+
+
+smilePath = "./haarcascade_smile.xml"
 
 class Face(object):
 
-    EYE_AR_THRESH = 0.22
+    EYE_AR_THRESH = 0.23
     EYE_AR_CONSEC_FRAMES = 3
     eye_counter = 0
     
@@ -21,13 +26,23 @@ class Face(object):
     life_counter = 3
     alive = True
 
+    
     name = 'unknown'
+
+    pitch_limit = [-15, 15]
+    yaw_limit = [-30, 30]
+
+    smileCascade = cv2.CascadeClassifier(smilePath)
 
     def __init__(self, face_rect):
         self.face_rect = face_rect
         self.last_time_eyes_open = time.time()
         self.last_time_see_road = time.time()
+        self.names = {}
+        self.play_alarm = False
+        self.music = vlc.MediaPlayer('rooster.mp3')
 
+        
     def match(self, face_rects):
         min_dist = 1000
         threshold = 100
@@ -42,7 +57,7 @@ class Face(object):
             # distance = dist.euclidean(face_center, cur_center)
 
             if distance < threshold and distance < min_dist:
-                min_dist = dist
+                min_dist = distance
                 ind = i
 
         if min_dist == 1000:
@@ -65,29 +80,44 @@ class Face(object):
             self.name = name
 
         cv2.putText(self.img, str(self.name), (10, 10), cv2.FONT_HERSHEY_PLAIN,
-            1.0*self.img.shape[0]/240, (0, 255, 0), thickness=1)
+            1.0, (0, 255, 0), thickness=1)
+        
+        euler_angle = np.round(euler_angle, 1)
+
+        rpy = str(euler_angle[2, 0]) + ', ' + str(euler_angle[0, 0]) + ', ' + str(euler_angle[1, 0])
+
+        cv2.putText(self.img, rpy, (10, self.img.shape[0]-10), cv2.FONT_HERSHEY_PLAIN,
+            0.7, (0, 255, 0), thickness=1)
 
         #check head pose if seeing road
         if self.see_road(euler_angle):
             cv2.putText(self.img, "seeing road", (10, 25), cv2.FONT_HERSHEY_PLAIN,
                     1, (0, 255, 0), thickness=1)
             self.last_time_see_road = time.time()
+            not_seeing_road_elapsed_time = 0.0
         else:
-            not_seeing_road_elapsed_time = str(round((time.time() - self.last_time_see_road), 1)) + ' s'            
-            cv2.putText(self.img, "not seeing road: "+not_seeing_road_elapsed_time, (10, 25), cv2.FONT_HERSHEY_PLAIN,
+            not_seeing_road_elapsed_time = round((time.time() - self.last_time_see_road), 1)            
+            cv2.putText(self.img, "not seeing road: "+ str(not_seeing_road_elapsed_time), (10, 25), cv2.FONT_HERSHEY_PLAIN,
                     1, (0, 0, 255), thickness=1)
 
-        
+
+
+
         #check status of eyes
         if self.eyes_open(shape):
             cv2.putText(self.img, "eyes_open", (10, 40), cv2.FONT_HERSHEY_PLAIN,
                             1, (0, 255, 0), thickness=1)
             self.last_time_eyes_open = time.time()
+            closed_eyes_elapsed_time = 0.0
         else:
-            closed_eyes_elapsed_time = str(round((time.time() - self.last_time_eyes_open), 1)) + ' s'
-            cv2.putText(self.img, "eyes closed: "+closed_eyes_elapsed_time, (10, 40), cv2.FONT_HERSHEY_PLAIN,
+            closed_eyes_elapsed_time = round((time.time() - self.last_time_eyes_open), 1)
+            cv2.putText(self.img, "eyes closed: "+str(closed_eyes_elapsed_time), (10, 40), cv2.FONT_HERSHEY_PLAIN,
                             1, (0, 0, 255), thickness=1)
 
+        if not_seeing_road_elapsed_time > 3.0 or closed_eyes_elapsed_time > 3.0:
+            self.music.play()
+        else:
+            self.music.stop()
 
         #check status of eyes
         mouth_status = self.mouth_status(shape)
@@ -99,22 +129,43 @@ class Face(object):
             cv2.putText(self.img, mouth_status + ': ' + str(self.yawn_count), (10, 55), cv2.FONT_HERSHEY_PLAIN,
                                 1, (0, 0, 255), thickness=1)
         else:
-            self.start_yawn = False
+            if mouth_status == "mouth closed":
+                self.start_yawn = False
 
             cv2.putText(self.img, mouth_status+ ', yawn: ' + str(self.yawn_count), (10, 55), cv2.FONT_HERSHEY_PLAIN,
                                 1, (0, 255, 0), thickness=1)
+
+        smile = self.detect_smile()
+        # Set region of interest for smiles
+        for (x, y, w, h) in smile:
+            cv2.putText(self.img, 'smile ', (10, 70), cv2.FONT_HERSHEY_PLAIN,
+                                1, (0, 255, 255), thickness=1)
+            # cv2.rectangle(self.img, (x, y), (x+w, y+h), (255, 0, 0), 1)
+            
+
                 
+    def detect_smile(self):
+        roi_gray = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
+
+        smile = self.smileCascade.detectMultiScale(
+            roi_gray,
+            scaleFactor= 1.7,
+            minNeighbors=22,
+            minSize=(25, 25),
+            flags=cv2.CASCADE_SCALE_IMAGE
+            )
+
+        return smile
+
 
     def see_road(self, euler_angle):
         #check the head yaw and pitch only
-        pitch_limit = [-15, 15]
-        yaw_limit = [-30, 30]
 
         pitch = euler_angle[0, 0]
         yaw = euler_angle[1, 0]
 
-        if pitch > pitch_limit[0] and pitch < pitch_limit[1]:
-            if yaw > yaw_limit[0] and yaw < yaw_limit[1]:
+        if pitch > self.pitch_limit[0] and pitch < self.pitch_limit[1]:
+            if yaw > self.yaw_limit[0] and yaw < self.yaw_limit[1]:
                 return True
 
         return False
@@ -164,7 +215,15 @@ class Face(object):
             return "unknown"
         
         name = face_recognition_knn.predict([encoded_face], model_path="trained_knn_model.clf")[0]
-        
+
+        if name != "unknown":
+            if name in self.names:
+                self.names[name] += 1
+            else:
+                self.names[name] = 1
+
+            name = max(self.names.items(), key=operator.itemgetter(1))[0]
+
 
         return name
     
@@ -174,13 +233,11 @@ class Face(object):
 
         C = dist.euclidean(mouth[6], mouth[0])
 
-
         # compute the eye aspect ratio
         ear = (A + B) / (2.0 * C)
      
         # return the eye aspect ratio
         return ear
-
 
     def eye_aspect_ratio(self, eye):
         # compute the euclidean distances between the two sets of
@@ -197,4 +254,3 @@ class Face(object):
      
         # return the eye aspect ratio
         return ear
-

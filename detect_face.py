@@ -5,10 +5,15 @@ import face_recognition
 import time
 import face_recognition_knn
 import math
-
+import copy
 from imutils import face_utils
 from scipy.spatial import distance as dist
 from face import Face
+
+
+prototxt = 'deploy.prototxt'
+weight = 'res10_300x300_ssd_iter_140000.caffemodel'
+net = cv2.dnn.readNetFromCaffe(prototxt, weight)
 
 face_landmark_path = './shape_predictor_68_face_landmarks.dat'
 
@@ -69,6 +74,32 @@ def get_head_pose(shape):
 
     return reprojectdst, euler_angle
 
+def detect(img):
+
+    h, w = img.shape[:2]
+    blob = cv2.dnn.blobFromImage(cv2.resize(img, (300, 300)), 1.0,
+        (300, 300), (104.0, 177.0, 123.0))
+
+    net.setInput(blob)
+    detections = net.forward()
+    
+    detections = np.squeeze(detections)
+
+
+    dets = dlib.rectangles()
+    for i in range(detections.shape[0]):
+
+        if detections[i, 2] > 0.3:
+            # compute the (x, y)-coordinates of the bounding box for the
+            # object
+            box = detections[i, 3:7] * np.array([w, h, w, h])
+            # dets.append(box.astype(np.uint16))
+            box = box.astype(np.uint16)
+            rect = dlib.rectangle(box[0], box[1], box[2], box[3])
+
+            dets.append(rect)
+
+    return dets
 
 
 def main():
@@ -78,7 +109,6 @@ def main():
         print("Unable to connect to camera.")
         return
         
-
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor(face_landmark_path)
     
@@ -87,7 +117,11 @@ def main():
     faces_list = []
     no_face_detected_count = 0
 
+    frame_count = 0
+    hz = []
+
     while cap.isOpened():
+        # try:
         print("-----")
         start_time = time.time()
         ret, img = cap.read()
@@ -102,9 +136,27 @@ def main():
 
         if ret:
             #detect faces from image
-            face_rects = detector(img, 0)
-            
+            #skip frames for this cos it's slower
+            if frame_count%3 == 0:
+                #resnet way
+                # face_rects = detect(img)
+                #dlib way
+                face_rects = detector(img, 0)
+                
+                prev_face_rects = copy.copy(face_rects)
+                frame_count = 0
+            else:
+                face_rects = copy.copy(prev_face_rects)
+
+
             if len(face_rects) != 0:
+                #check if faces_list has duplicates:
+                for face_0, face_1 in zip(*[iter(faces_list)]*2):
+                    distance = abs(face_0.face_rect.center().x-face_1.face_rect.center().x)+abs(face_0.face_rect.center().y-face_1.face_rect.center().y)
+                    if distance < 5:
+                        #delete one of these
+                        faces_list.remove(face_0)
+
                 for face in faces_list:
                     face_rects = face.match(face_rects)
                     if not face.alive:
@@ -146,7 +198,6 @@ def main():
                     h = np.clip(h, 1, img.shape[0]-y)
 
                     img_masked = cv2.bitwise_and(img, img, mask = mask)
-
                     faceOrig = cv2.resize(img_masked[y:y + h, x:x + w], (int(img.shape[0]/2), int(img.shape[0]/2)))
                     face_img = fa.align(img_masked, gray, face_rect)
 
@@ -170,7 +221,16 @@ def main():
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-        print("hz: " + str(1.0/(time.time()- start_time)))
+            frame_count+=1
+        hz.append(1.0/(time.time()- start_time))
+        if len(hz) > 20:
+            hz.pop(0)
+
+        print("hz: " + str(sum(hz)/len(hz)))
+    
+        # except:
+        #     print("error")
+        #     continue
 
 if __name__ == '__main__':
     main()
