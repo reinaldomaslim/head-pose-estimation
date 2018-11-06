@@ -201,7 +201,6 @@ def main():
                     faceOrig = cv2.resize(img_masked[y:y + h, x:x + w], (int(img.shape[0]/2), int(img.shape[0]/2)))
                     face_img = fa.align(img_masked, gray, face_rect)
 
-
                     face.update(face_img, shape, euler_angle)
                     start_y = int(i%2*img.shape[0]/2)
                     start_x = int(int(i/2)*img.shape[0]/2)
