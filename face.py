@@ -9,43 +9,52 @@ from scipy import stats
 
 from imutils import face_utils
 from scipy.spatial import distance as dist
+from filterpy.gh import GHFilter
 
 import vlc
 
 smilePath = "./haarcascade_smile.xml"
+audio = False
 
 class Face(object):
 
     EYE_AR_THRESH = 0.20
     EYE_AR_CONSEC_FRAMES = 3
-    eye_counter = 0
-    
-    yawn_count = 0
-    start_yawn = False
-
-    life_counter = 3
-    alive = True
-
     name = 'unknown'
-
-    pitch_limit = [-15, 15]
+    pitch_limit = [-20, 20]
     yaw_limit = [-30, 30]
-
+    init_life_count = 5
     smileCascade = cv2.CascadeClassifier(smilePath)
 
-    def __init__(self, face_rect):
+    def __init__(self, face_rect, img):
         self.face_rect = face_rect
         self.last_time_eyes_open = time.time()
         self.last_time_see_road = time.time()
         self.names = {}
         self.play_alarm = False
-        self.music = vlc.MediaPlayer('rooster.mp3')
+        self.full_img = img
+        self.gaze_filter = GHFilter(x=0, dx=np.array([0]), dt=1, g=.6, h=.02)
+        self.skip_frame = 0
+        self.is_driver = False
+        self.start_yawn = False
+        self.life_counter = self.init_life_count
+        self.eye_counter = 0
+        self.yawn_count = 0
+        self.alive = True
+        self.born_time = time.time()
+   
+        if audio:
+            self.music = vlc.MediaPlayer('rooster.mp3')
 
-        
-    def match(self, face_rects):
+    def life_reset(self):
+        self.life_counter = self.init_life_count
+
+    def match(self, face_rects, img):
+        self.full_img = img
         min_dist = 1000
         threshold = 100
         cur_center = self.face_rect.center()
+        ind = -1
 
         for i in range(len(face_rects)):
             face_rect = face_rects[i]
@@ -53,18 +62,17 @@ class Face(object):
 
             #find which one is closest to current face_rect we know
             distance = abs(cur_center.x-face_center.x)+abs(cur_center.y-face_center.y)
-            # distance = dist.euclidean(face_center, cur_center)
-
-            if distance < threshold and distance < min_dist:
+            
+            if distance < min(threshold, min_dist):
                 min_dist = distance
                 ind = i
 
-        if min_dist == 1000:
+        if ind == -1:
             self.life_counter -= 1
             if self.life_counter == 0:
                 self.alive = False
         else:
-            self.life_counter = 3
+            self.life_reset()
             self.face_rect = face_rects[ind]
             face_rects.pop(ind)
 
@@ -72,11 +80,16 @@ class Face(object):
 
     def update(self, face_img, shape, euler_angle):
         self.img = face_img
+        row, col = face_img.shape[:2]
 
-        #check who is this
-        name = self.classify_face(face_img) 
-        if name != 'unknown':
-            self.name = name
+        #check who is this, do this in skip to save computation
+        if self.skip_frame % 10 == 0:
+            name = self.classify_face(face_img) 
+            if name != 'unknown':
+                self.name = name
+            self.skip_frame = 0
+
+        self.skip_frame += 1
 
         cv2.putText(self.img, str(self.name), (10, 10), cv2.FONT_HERSHEY_PLAIN,
             1.0, (0, 255, 0), thickness=1)
@@ -88,8 +101,19 @@ class Face(object):
         cv2.putText(self.img, rpy, (10, self.img.shape[0]-10), cv2.FONT_HERSHEY_PLAIN,
             0.7, (0, 255, 0), thickness=1)
 
+        elapsed_time = str(round(time.time() - self.born_time, 1))
+        cv2.putText(self.img, elapsed_time, (self.img.shape[1]-40, self.img.shape[0]-10), cv2.FONT_HERSHEY_PLAIN,
+            0.7, (0, 255, 0), thickness=1)
+
+        gaze_direction, leftEye_patch, rightEye_patch = self.check_gaze(shape)
+        cv2.putText(self.img, "gaze: " + str(gaze_direction), (10, self.img.shape[0]-25), cv2.FONT_HERSHEY_PLAIN,
+                0.7, (0, 255, 0), thickness=1)
+
+        self.img[:leftEye_patch.shape[0], int(col/2)-leftEye_patch.shape[1]:int(col/2)] = cv2.cvtColor(leftEye_patch, cv2.COLOR_GRAY2BGR)
+        self.img[:rightEye_patch.shape[0], int(col/2):int(col/2)+rightEye_patch.shape[1]] = cv2.cvtColor(rightEye_patch, cv2.COLOR_GRAY2BGR)
+
         #check head pose if seeing road
-        if self.see_road(euler_angle):
+        if self.see_road(euler_angle, gaze_direction):
             cv2.putText(self.img, "seeing road", (10, 25), cv2.FONT_HERSHEY_PLAIN,
                     1, (0, 255, 0), thickness=1)
             self.last_time_see_road = time.time()
@@ -110,10 +134,11 @@ class Face(object):
             cv2.putText(self.img, "eyes closed: "+str(closed_eyes_elapsed_time), (10, 40), cv2.FONT_HERSHEY_PLAIN,
                             1, (0, 0, 255), thickness=1)
 
-        if not_seeing_road_elapsed_time > 3.0 or closed_eyes_elapsed_time > 3.0:
-            self.music.play()
-        else:
-            self.music.stop()
+        if audio:
+            if not_seeing_road_elapsed_time > 3.0 or closed_eyes_elapsed_time > 3.0:
+                self.music.play()
+            else:
+                self.music.stop()
 
         #check status of eyes
         mouth_status = self.mouth_status(shape)
@@ -159,10 +184,11 @@ class Face(object):
         cv2.putText(self.img, brow_text, (10, 85), cv2.FONT_HERSHEY_PLAIN,
                             1, (0, 255, 255), thickness=1)
 
-
         if self.in_distress(shape):
             cv2.putText(self.img, 'distress ', (10, 100), cv2.FONT_HERSHEY_PLAIN,
                                 1, (0, 255, 255), thickness=1)
+
+
 
     def detect_smile(self):
         roi_gray = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
@@ -177,12 +203,11 @@ class Face(object):
 
         return smile
 
-
-    def see_road(self, euler_angle):
+    def see_road(self, euler_angle, gaze_direction):
         #check the head yaw and pitch only
 
         pitch = euler_angle[0, 0]
-        yaw = euler_angle[1, 0]
+        yaw = euler_angle[1, 0] + gaze_direction
 
         if pitch > self.pitch_limit[0] and pitch < self.pitch_limit[1]:
             if yaw > self.yaw_limit[0] and yaw < self.yaw_limit[1]:
@@ -214,6 +239,48 @@ class Face(object):
             else:
                 return False
 
+    def check_gaze(self, shape):
+        #check gaze of eyes
+
+        (rStart, rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
+        (lStart, lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
+        
+        leftEye = shape[lStart:lEnd]
+        rightEye = shape[rStart:rEnd]
+
+        xmin = np.clip(np.amin(leftEye[:, 0]), 0, self.full_img.shape[1]-1)
+        ymin = np.clip(np.amin(leftEye[:, 1]), 0, self.full_img.shape[0]-1)
+        xmax = np.clip(np.amax(leftEye[:, 0]), 0, self.full_img.shape[1]-1)
+        ymax = np.clip(np.amax(leftEye[:, 1]), 0, self.full_img.shape[0]-1)
+
+
+        leftEye_patch = cv2.resize(self.full_img[ymin:ymax, xmin:xmax], (30, 10))
+        leftEye_patch = cv2.GaussianBlur(leftEye_patch, (9, 9), 0)
+
+        xmin = np.clip(np.amin(rightEye[:, 0]), 0, self.full_img.shape[1]-1)
+        ymin = np.clip(np.amin(rightEye[:, 1]), 0, self.full_img.shape[0]-1)
+        xmax = np.clip(np.amax(rightEye[:, 0]), 0, self.full_img.shape[1]-1)
+        ymax = np.clip(np.amax(rightEye[:, 1]), 0, self.full_img.shape[0]-1)
+
+        rightEye_patch = cv2.resize(self.full_img[ymin:ymax, xmin:xmax], (30, 10))
+        rightEye_patch = cv2.GaussianBlur(rightEye_patch, (9, 9), 0)
+        
+        sum_left = np.sum(leftEye_patch, axis = 0)
+        sum_right = np.sum(rightEye_patch, axis = 0)
+
+        eyeball_pos_left = np.argmin(sum_left)
+        eyeball_pos_right = np.argmin(sum_right)
+
+        cv2.line(leftEye_patch, (eyeball_pos_left, 0), (eyeball_pos_left, rightEye_patch.shape[0]), (255), 1, cv2.LINE_AA)
+        cv2.line(rightEye_patch, (eyeball_pos_right, 0), (eyeball_pos_right, rightEye_patch.shape[0]), (255), 1, cv2.LINE_AA)
+
+        gaze_angle_left = 5.0*(leftEye_patch.shape[1]/2 - eyeball_pos_left) 
+        gaze_angle_right = 5.0*(rightEye_patch.shape[1]/2 - eyeball_pos_right) 
+
+        avg_gaze = (gaze_angle_right+gaze_angle_left)/2
+        avg_gaze, _ = self.gaze_filter.update(avg_gaze)
+
+        return round(avg_gaze[0], 2), leftEye_patch, rightEye_patch
 
     def mouth_status(self, shape):
         (mStart, mEnd) = face_utils.FACIAL_LANDMARKS_IDXS["mouth"]
@@ -221,13 +288,12 @@ class Face(object):
         mouth = shape[mStart:mEnd]
         mouthEAR = self.mouth_aspect_ratio(mouth)
         
-        if mouthEAR > 0.7:
+        if mouthEAR > 0.8:
             return "yawn"
-        elif mouthEAR < 0.7 and mouthEAR > 0.4:
+        elif mouthEAR < 0.8 and mouthEAR > 0.4:
             return "mouth open"
         else:
             return "mouth closed"
-
 
     def brow_status(self, shape):
         #classify as inner_brow_raise, outer_brow_raise, and brow lowerer. wrt to each other and wrt to upper eye
@@ -259,7 +325,7 @@ class Face(object):
             res += 1
         if outer_brow_ratio > 0.60:
             res += 2
-        if brow_lowerer_ratio < 0.18:
+        if brow_lowerer_ratio < 0.17:
             res += 4
 
         return res
@@ -269,7 +335,7 @@ class Face(object):
         large_triangle = dist.euclidean(shape[33], shape[26]) + dist.euclidean(shape[26], shape[17]) + dist.euclidean(shape[17], shape[33])
 
         procerus_aspect_ratio = small_triangle/large_triangle
-        if procerus_aspect_ratio < 0.185:
+        if procerus_aspect_ratio < 0.190:
             #in distress
             return True
         else:
